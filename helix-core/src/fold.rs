@@ -217,6 +217,63 @@ impl FoldedRange {
     }
 }
 
+/// Returns the document line that is displayed where `line` would be: `line` itself unless the
+/// line is hidden by a fold, in which case that is the fold's header.
+///
+/// `folded` must be sorted and non-overlapping, i.e. [`Folds::folded`] or the line-annotation
+/// layer built from it.
+pub fn visible_line(folded: &[FoldedRange], line: usize) -> usize {
+    let idx = folded.partition_point(|fold| fold.last_line < line);
+    match folded.get(idx) {
+        Some(fold) if fold.header_line < line => fold.header_line,
+        _ => line,
+    }
+}
+
+/// Returns the line that is displayed directly after the (visible) `line`, skipping lines that
+/// are hidden by a fold. Every fold, no matter how many lines it hides, counts as a single step,
+/// the same as any other line: this is what makes a fold collapse to a single visual row.
+pub fn next_visible_line(folded: &[FoldedRange], line: usize) -> usize {
+    let line = visible_line(folded, line);
+    let idx = folded.partition_point(|fold| fold.header_line < line);
+    match folded.get(idx) {
+        Some(fold) if fold.header_line == line => fold.last_line + 1,
+        _ => line + 1,
+    }
+}
+
+/// Returns the line that is displayed directly before `line`, skipping lines that are hidden by
+/// a fold. Returns `None` for the first line.
+pub fn prev_visible_line(folded: &[FoldedRange], line: usize) -> Option<usize> {
+    let line = visible_line(folded, line);
+    Some(visible_line(folded, line.checked_sub(1)?))
+}
+
+/// The `line`'th visible line counting forward (`count >= 0`) or backward (`count < 0`) from
+/// `from`, skipping lines hidden by a fold the same way [`next_visible_line`]/
+/// [`prev_visible_line`] do. Saturates at the start of the document; does not know where the
+/// document ends, so a large enough `count` can return a line past the end.
+///
+/// This is the fold-aware equivalent of `from + count`/`from - count`, used to compute how many
+/// *document* lines a given number of *visible* rows spans (or vice versa) — e.g. to know how
+/// far into the document a viewport of a given height actually reaches.
+pub fn visible_line_offset(folded: &[FoldedRange], from: usize, count: isize) -> usize {
+    let mut line = from;
+    if count >= 0 {
+        for _ in 0..count {
+            line = next_visible_line(folded, line);
+        }
+    } else {
+        for _ in 0..count.unsigned_abs() {
+            match prev_visible_line(folded, line) {
+                Some(prev) => line = prev,
+                None => break,
+            }
+        }
+    }
+    line
+}
+
 /// The set of closed folds of a document.
 ///
 /// Folds may be nested. Opening an outer fold leaves inner closed folds closed, like in vim.
@@ -245,6 +302,26 @@ impl Folds {
             .binary_search_by_key(&line, |fold| fold.header_line)
             .ok()
             .map(|idx| &self.folded[idx])
+    }
+
+    /// See the free function of the same name.
+    pub fn visible_line(&self, line: usize) -> usize {
+        visible_line(&self.folded, line)
+    }
+
+    /// See the free function of the same name.
+    pub fn next_visible_line(&self, line: usize) -> usize {
+        next_visible_line(&self.folded, line)
+    }
+
+    /// See the free function of the same name.
+    pub fn prev_visible_line(&self, line: usize) -> Option<usize> {
+        prev_visible_line(&self.folded, line)
+    }
+
+    /// See the free function of the same name.
+    pub fn visible_line_offset(&self, from: usize, count: isize) -> usize {
+        visible_line_offset(&self.folded, from, count)
     }
 
     pub fn is_closed(&self, span: FoldSpan) -> bool {
@@ -530,6 +607,94 @@ f
         // clamped to the last char of the header
         assert_eq!(folds.visible_pos(text.slice(..), far_in_body), 5);
         assert_eq!(folds.visible_pos(text.slice(..), 3), 3);
+    }
+
+    // Regression coverage for the bug where things that estimate "how far down the document
+    // does an N-row viewport reach" (the syntax highlighter's range, `gw`'s candidate range,
+    // `View::estimate_last_doc_line`, ...) computed that with plain `first_line + N`, which
+    // undercounts once a fold puts more than N raw lines on screen in N rows.
+    mod visible_line_offset {
+        use super::*;
+
+        #[test]
+        fn matches_plain_arithmetic_without_folds() {
+            let folded: Vec<FoldedRange> = Vec::new();
+            for from in 0..5 {
+                for count in 0..5 {
+                    assert_eq!(
+                        visible_line_offset(&folded, from, count),
+                        from + count as usize
+                    );
+                }
+                for count in 1..5 {
+                    assert_eq!(
+                        visible_line_offset(&folded, from, -count),
+                        from.saturating_sub(count as usize)
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn a_fold_counts_as_a_single_step_forward_and_backward() {
+            let text = Rope::from("a\nb\nc\nd\ne\nf\ng\n");
+            let mut folds = Folds::default();
+            // "b" is the header of a fold hiding "c" and "d"
+            folds.close(text.slice(..), span(1, 3));
+            let folded = folds.folded();
+
+            // from "a": 1 step reaches the fold's header ("b"), a 2nd step skips the whole
+            // hidden body in one go and reaches "e", not "c" or "d"
+            assert_eq!(visible_line_offset(folded, 0, 1), 1);
+            assert_eq!(visible_line_offset(folded, 0, 2), 4);
+            assert_eq!(visible_line_offset(folded, 0, 3), 5);
+
+            // and the same walking backward from "f"
+            assert_eq!(visible_line_offset(folded, 5, -1), 4);
+            assert_eq!(visible_line_offset(folded, 5, -2), 1);
+            assert_eq!(visible_line_offset(folded, 5, -3), 0);
+        }
+
+        #[test]
+        fn a_large_fold_makes_a_small_viewport_reach_much_further_than_its_height() {
+            // this is the shape of the actual bug: a small, fixed viewport height must still
+            // reach far into the document once most of it is folded away. Callers turn a
+            // height into the last visible line the same way the original, non-fold-aware
+            // code did: `visible_line_offset(first_line, height) - 1` (matching plain
+            // `first_line + height - 1` when there are no folds to skip).
+            let mut text = "a\n".to_string();
+            for i in 0..500 {
+                text.push_str(&format!("filler{i}\n"));
+            }
+            text.push_str("last\n");
+            let text = Rope::from(text);
+            let last_line = text.len_lines() - 2; // "last", not the trailing empty line
+
+            let mut folds = Folds::default();
+            folds.close(text.slice(..), FoldSpan::new(0, 500).unwrap());
+            let folded = folds.folded();
+
+            // a plain (fold-unaware) 3-row viewport starting at the fold's header would only
+            // reach line 2, nowhere near "last" -- the whole point of this function
+            let plain_last_visible_line = 3 - 1;
+            assert!(plain_last_visible_line < last_line);
+
+            // but accounting for the fold, it reaches (and includes) "last": one step from the
+            // header skips the entire hidden body in one go, landing directly on "last"
+            let last_visible_line = visible_line_offset(folded, 0, 3) - 1;
+            assert!(
+                last_visible_line >= last_line,
+                "a 3-row viewport over the folded document should still reach \"last\" (line \
+                 {last_line}), got last_visible_line = {last_visible_line}"
+            );
+        }
+
+        #[test]
+        fn does_not_walk_past_the_start_of_the_document() {
+            let folded: Vec<FoldedRange> = Vec::new();
+            assert_eq!(visible_line_offset(&folded, 0, -1), 0);
+            assert_eq!(visible_line_offset(&folded, 2, -10), 0);
+        }
     }
 }
 

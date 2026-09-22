@@ -959,9 +959,17 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
 
             let loader = cx.editor.syn_loader.load();
             let config = cx.editor.config();
+            // The document being previewed here isn't shown in a real view, so it has no
+            // folds of its own to account for.
+            let folds = helix_core::fold::Folds::default();
 
-            let syntax_highlighter =
-                EditorView::doc_syntax_highlighter(doc, offset.anchor, area.height, &loader);
+            let syntax_highlighter = EditorView::doc_syntax_highlighter(
+                doc,
+                offset.anchor,
+                area.height,
+                &folds,
+                &loader,
+            );
             let mut overlay_highlights = Vec::new();
             if doc
                 .language_config()
@@ -972,6 +980,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                     doc,
                     offset.anchor,
                     area.height,
+                    &folds,
                     &cx.editor.theme,
                     &loader,
                 ) {

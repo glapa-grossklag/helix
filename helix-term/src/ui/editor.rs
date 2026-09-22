@@ -15,6 +15,7 @@ use crate::{
 
 use helix_core::{
     diagnostic::NumberOrString,
+    fold::Folds,
     graphemes::{next_grapheme_boundary, prev_grapheme_boundary},
     movement::Direction,
     syntax::{self, OverlayHighlights},
@@ -116,14 +117,16 @@ impl EditorView {
             decorations.add_decoration(line_decoration);
         }
 
+        let folds = doc.folds(view.id);
         let syntax_highlighter =
-            Self::doc_syntax_highlighter(doc, view_offset.anchor, inner.height, &loader);
+            Self::doc_syntax_highlighter(doc, view_offset.anchor, inner.height, folds, &loader);
         let mut overlays = Vec::new();
 
         overlays.push(Self::overlay_syntax_highlights(
             doc,
             view_offset.anchor,
             inner.height,
+            folds,
             &text_annotations,
         ));
 
@@ -132,9 +135,14 @@ impl EditorView {
             .and_then(|config| config.rainbow_brackets)
             .unwrap_or(config.rainbow_brackets)
         {
-            if let Some(overlay) =
-                Self::doc_rainbow_highlights(doc, view_offset.anchor, inner.height, theme, &loader)
-            {
+            if let Some(overlay) = Self::doc_rainbow_highlights(
+                doc,
+                view_offset.anchor,
+                inner.height,
+                folds,
+                theme,
+                &loader,
+            ) {
                 overlays.push(overlay);
             }
         }
@@ -276,15 +284,26 @@ impl EditorView {
             .for_each(|area| surface.set_style(area, ruler_theme))
     }
 
+    /// The byte range of the document that is actually reachable within `height` rows starting
+    /// at `row`, i.e. the range highlighting (and similar per-frame, viewport-scoped work) needs
+    /// to cover. A closed fold can put far more document lines on screen than `height` alone
+    /// would suggest (it collapses however many lines it hides into a single visible row), so
+    /// this walks fold-aware "visible" steps rather than just adding `height` to `row` directly;
+    /// getting this wrong truncates the range short of what is actually rendered, and everything
+    /// past the truncation point silently stops being highlighted.
     fn viewport_byte_range(
         text: helix_core::RopeSlice,
         row: usize,
         height: u16,
+        folds: &Folds,
     ) -> std::ops::Range<usize> {
         // Calculate viewport byte ranges:
         // Saturating subs to make it inclusive zero indexing.
         let last_line = text.len_lines().saturating_sub(1);
-        let last_visible_line = (row + height as usize).saturating_sub(1).min(last_line);
+        let last_visible_line = folds
+            .visible_line_offset(row, height as isize)
+            .saturating_sub(1)
+            .min(last_line);
         let start = text.line_to_byte(row.min(last_line));
         let end = text.line_to_byte(last_visible_line + 1);
 
@@ -293,17 +312,20 @@ impl EditorView {
 
     /// Get the syntax highlighter for a document in a view represented by the first line
     /// and column (`offset`) and the last line. This is done instead of using a view
-    /// directly to enable rendering syntax highlighted docs anywhere (eg. picker preview)
+    /// directly to enable rendering syntax highlighted docs anywhere (eg. picker preview).
+    /// `folds` should be the real closed folds of the view being rendered, or `&Folds::default()`
+    /// for a context (like a picker preview) that has none.
     pub fn doc_syntax_highlighter<'editor>(
         doc: &'editor Document,
         anchor: usize,
         height: u16,
+        folds: &Folds,
         loader: &'editor syntax::Loader,
     ) -> Option<syntax::Highlighter<'editor>> {
         let syntax = doc.syntax()?;
         let text = doc.text().slice(..);
         let row = text.char_to_line(anchor.min(text.len_chars()));
-        let range = Self::viewport_byte_range(text, row, height);
+        let range = Self::viewport_byte_range(text, row, height, folds);
         let range = range.start as u32..range.end as u32;
 
         let highlighter = syntax.highlighter(text, loader, range);
@@ -314,12 +336,13 @@ impl EditorView {
         doc: &Document,
         anchor: usize,
         height: u16,
+        folds: &Folds,
         text_annotations: &TextAnnotations,
     ) -> OverlayHighlights {
         let text = doc.text().slice(..);
         let row = text.char_to_line(anchor.min(text.len_chars()));
 
-        let mut range = Self::viewport_byte_range(text, row, height);
+        let mut range = Self::viewport_byte_range(text, row, height, folds);
         range = text.byte_to_char(range.start)..text.byte_to_char(range.end);
 
         text_annotations.collect_overlay_highlights(range)
@@ -329,13 +352,14 @@ impl EditorView {
         doc: &Document,
         anchor: usize,
         height: u16,
+        folds: &Folds,
         theme: &Theme,
         loader: &syntax::Loader,
     ) -> Option<OverlayHighlights> {
         let syntax = doc.syntax()?;
         let text = doc.text().slice(..);
         let row = text.char_to_line(anchor.min(text.len_chars()));
-        let visible_range = Self::viewport_byte_range(text, row, height);
+        let visible_range = Self::viewport_byte_range(text, row, height, folds);
         let start = syntax::child_for_byte_range(
             &syntax.tree().root_node(),
             visible_range.start as u32..visible_range.end as u32,
@@ -1757,5 +1781,98 @@ fn canonicalize_key(key: &mut KeyEvent) {
     } = key
     {
         key.modifiers.remove(KeyModifiers::SHIFT)
+    }
+}
+
+#[cfg(test)]
+mod fold_highlighting_test {
+    //! Regression test for a bug where a closed fold made syntax highlighting (and rainbow
+    //! brackets, and overlay highlights) stop working for everything rendered after it: the
+    //! viewport's highlighted byte range was computed as `first_visible_line + viewport_height`
+    //! raw document lines, which is far too narrow once a fold puts more than `viewport_height`
+    //! raw lines on screen. This drives the actual `Highlighter` `doc_syntax_highlighter`
+    //! produces (the same one the renderer drives) rather than just re-checking the range math,
+    //! so it catches a regression in the wiring between them, not just in `Folds` itself.
+    use std::sync::Arc;
+
+    use arc_swap::ArcSwap;
+    use helix_core::fold::{FoldSpan, Folds};
+    use helix_core::syntax::HighlightEvent;
+    use helix_view::{editor::Config, Document};
+
+    use super::EditorView;
+
+    fn rust_doc_with_a_big_function() -> (Document, usize) {
+        let loader = helix_core::config::default_lang_loader();
+        let mut src = "fn big() {\n".to_string();
+        for i in 0..80 {
+            src.push_str(&format!("    let x{i} = {i};\n"));
+        }
+        let marker_offset = src.len();
+        src.push_str("    let marker = 999;\n}\n\nfn small() {}\n");
+
+        let mut doc = Document::from(
+            src.as_str().into(),
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            // `syntax::Loader` isn't `Clone`; the document gets its own independent instance,
+            // separate from the `loader` this function returns for the test to use directly.
+            Arc::new(ArcSwap::from_pointee(
+                helix_core::config::default_lang_loader(),
+            )),
+        );
+        let lang = loader
+            .language_for_name("rust")
+            .expect("the rust language must be configured");
+        doc.set_language(Some(loader.language(lang).config().clone()), &loader);
+        assert!(doc.syntax().is_some(), "rust grammar must be compiled for this test to be meaningful (run `hx --grammar build` or let `cargo build` fetch it)");
+
+        (doc, marker_offset)
+    }
+
+    /// The furthest byte offset a `Highlighter` actually produces an event for.
+    fn highlighter_reach(mut highlighter: helix_core::syntax::Highlighter) -> usize {
+        let mut reach = 0;
+        loop {
+            let offset = highlighter.next_event_offset();
+            if offset == u32::MAX {
+                return reach;
+            }
+            reach = offset as usize;
+            let (event, _) = highlighter.advance();
+            if let HighlightEvent::Refresh = event {
+                // still real progress, keep going
+            }
+        }
+    }
+
+    #[test]
+    fn closed_fold_extends_the_highlighted_range_far_enough() {
+        let (doc, marker_offset) = rust_doc_with_a_big_function();
+        let loader = helix_core::config::default_lang_loader();
+
+        // Sanity check / "positive control": with no folds, a 3-row viewport must NOT reach the
+        // marker line (it's 80+ raw lines down) -- otherwise this test wouldn't actually be
+        // distinguishing fold-aware behavior from "the height was just generous enough".
+        let unfolded = EditorView::doc_syntax_highlighter(&doc, 0, 3, &Folds::default(), &loader)
+            .expect("rust has a highlighter");
+        assert!(
+            highlighter_reach(unfolded) < marker_offset,
+            "test setup is broken: a 3-row viewport with no folds should not reach the marker"
+        );
+
+        // Close a fold hiding the 80 filler lines (but not the marker line after them). A
+        // 3-row viewport should now be: the header ("fn big() {"), the marker line (the fold
+        // collapses everything between them into that single step), and "}".
+        let mut folds = Folds::default();
+        assert!(folds.close(doc.text().slice(..), FoldSpan::new(0, 80).unwrap()));
+
+        let folded = EditorView::doc_syntax_highlighter(&doc, 0, 3, &folds, &loader)
+            .expect("rust has a highlighter");
+        assert!(
+            highlighter_reach(folded) >= marker_offset,
+            "the highlighter's range should reach the marker line once the filler lines between \
+             it and the top of the viewport are folded away"
+        );
     }
 }

@@ -377,10 +377,15 @@ impl View {
     pub fn estimate_last_doc_line(&self, doc: &Document) -> usize {
         let doc_text = doc.text().slice(..);
         let line = doc_text.char_to_line(doc.view_offset(self.id).anchor.min(doc_text.len_chars()));
+        // A closed fold can put many more document lines on screen than the viewport height
+        // alone would suggest (it collapses however many lines it hides into a single visible
+        // row), so this has to walk fold-aware "visible" steps rather than just adding the
+        // viewport height directly.
+        let last_line = doc
+            .folds(self.id)
+            .visible_line_offset(line, self.inner_height() as isize);
         // Saturating subs to make it inclusive zero indexing.
-        (line + self.inner_height())
-            .min(doc_text.len_lines())
-            .saturating_sub(1)
+        last_line.min(doc_text.len_lines()).saturating_sub(1)
     }
 
     /// Calculates the last non-empty visual line on screen
@@ -725,7 +730,7 @@ mod tests {
 
     use super::*;
     use arc_swap::ArcSwap;
-    use helix_core::{syntax, Rope};
+    use helix_core::{fold::FoldSpan, syntax, Rope};
 
     // 1 diagnostic + 1 spacer + 3 linenr (< 1000 lines) + 1 spacer + 1 diff
     const DEFAULT_GUTTER_OFFSET: u16 = 7;
@@ -1259,6 +1264,45 @@ mod tests {
         assert!(
             selection.primary().head <= doc.text().len_chars(),
             "jumplist selection must stay within document bounds after sync",
+        );
+    }
+
+    /// Regression test: `estimate_last_doc_line` used to compute `first_line + height` raw
+    /// document lines, which undercounts once a fold puts more raw lines on screen than the
+    /// viewport height alone would suggest. Commands like `goto_word` (`gw`) use this to decide
+    /// which words on screen are reachable, so undercounting it meant they'd miss words that
+    /// were actually visible below a fold.
+    #[test]
+    fn estimate_last_doc_line_accounts_for_folds() {
+        let mut view = View::new(DocumentId::default(), GutterConfig::default());
+        // height 4 -> inner_height (area minus the statusline) is 3
+        view.area = Rect::new(0, 0, 80, 4);
+
+        let mut text = "a\n".to_string();
+        for i in 0..500 {
+            text.push_str(&format!("filler{i}\n"));
+        }
+        text.push_str("last\n");
+        let last_line = text.lines().count() - 1; // "last", 0-indexed
+
+        let mut doc = Document::from(
+            Rope::from(text),
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        doc.ensure_view_init(view.id);
+
+        // without any fold, a 3-row viewport from the top doesn't come close to "last"
+        assert!(view.estimate_last_doc_line(&doc) < last_line);
+
+        // fold away everything between the header ("a") and "last"
+        doc.close_folds(view.id, [FoldSpan::new(0, 500).unwrap()]);
+        assert!(
+            view.estimate_last_doc_line(&doc) >= last_line,
+            "a 3-row viewport should reach \"last\" (line {last_line}) once the lines between \
+             it and the top of the document are folded away, got {}",
+            view.estimate_last_doc_line(&doc)
         );
     }
 }

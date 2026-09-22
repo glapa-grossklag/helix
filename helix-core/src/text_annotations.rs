@@ -5,7 +5,7 @@ use std::ops::Range;
 use std::ptr::NonNull;
 
 use crate::doc_formatter::FormattedGrapheme;
-use crate::fold::FoldedRange;
+use crate::fold::{self, FoldedRange};
 use crate::syntax::{Highlight, OverlayHighlights};
 use crate::{Position, Tendril};
 
@@ -398,29 +398,19 @@ impl<'a> TextAnnotations<'a> {
     /// Returns the document line that is displayed where `line` would be: `line` itself
     /// unless the line is hidden by a fold, in which case that is the fold's header.
     pub fn visible_line(&self, line: usize) -> usize {
-        let idx = self.folds.partition_point(|fold| fold.last_line < line);
-        match self.folds.get(idx) {
-            Some(fold) if fold.header_line < line => fold.header_line,
-            _ => line,
-        }
+        fold::visible_line(self.folds, line)
     }
 
     /// Returns the line that is displayed directly after the (visible) `line`, skipping
     /// lines that are hidden by a fold.
     pub fn next_visible_line(&self, line: usize) -> usize {
-        let line = self.visible_line(line);
-        let idx = self.folds.partition_point(|fold| fold.header_line < line);
-        match self.folds.get(idx) {
-            Some(fold) if fold.header_line == line => fold.last_line + 1,
-            _ => line + 1,
-        }
+        fold::next_visible_line(self.folds, line)
     }
 
     /// Returns the line that is displayed directly before `line`, skipping
     /// lines that are hidden by a fold. Returns `None` for the first line.
     pub fn prev_visible_line(&self, line: usize) -> Option<usize> {
-        let line = self.visible_line(line);
-        Some(self.visible_line(line.checked_sub(1)?))
+        fold::prev_visible_line(self.folds, line)
     }
 
     /// Removes all line annotations, useful for vertical motions
