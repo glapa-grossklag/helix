@@ -42,6 +42,7 @@ pub struct LanguageData {
     syntax: OnceCell<Option<SyntaxConfig>>,
     indent_query: OnceCell<Option<IndentQuery>>,
     textobject_query: OnceCell<Option<TextObjectQuery>>,
+    fold_query: OnceCell<Option<Query>>,
     tag_query: OnceCell<Option<TagQuery>>,
     rainbow_query: OnceCell<Option<RainbowQuery>>,
 }
@@ -53,6 +54,7 @@ impl LanguageData {
             syntax: OnceCell::new(),
             indent_query: OnceCell::new(),
             textobject_query: OnceCell::new(),
+            fold_query: OnceCell::new(),
             tag_query: OnceCell::new(),
             rainbow_query: OnceCell::new(),
         }
@@ -159,6 +161,23 @@ impl LanguageData {
                     })
                     .ok()
                     .flatten()
+            })
+            .as_ref()
+    }
+
+    /// Every named node that spans more than one line is foldable (see [`crate::fold`]). This
+    /// query pattern is generic: it matches any node of any grammar, so folding needs no
+    /// language-specific query file, just the compiled query below cached per-language (queries
+    /// are queried per-layer, so this also transparently covers injected languages).
+    const FOLD_QUERY_SRC: &str = "(_) @fold";
+
+    fn fold_query(&self, loader: &Loader) -> Option<&Query> {
+        self.fold_query
+            .get_or_init(|| {
+                let grammar = self.syntax_config(loader)?.grammar;
+                Query::new(grammar, Self::FOLD_QUERY_SRC, |_, _| Ok(()))
+                    .map_err(|err| log::error!("Failed to compile generic fold query: {err}"))
+                    .ok()
             })
             .as_ref()
     }
@@ -414,6 +433,10 @@ impl Loader {
 
     pub fn textobject_query(&self, lang: Language) -> Option<&TextObjectQuery> {
         self.language(lang).textobject_query(self)
+    }
+
+    pub fn fold_query(&self, lang: Language) -> Option<&Query> {
+        self.language(lang).fold_query(self)
     }
 
     pub fn tag_query(&self, lang: Language) -> Option<&TagQuery> {
