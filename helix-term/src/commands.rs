@@ -1202,16 +1202,17 @@ fn goto_window_bottom(cx: &mut Context) {
 
 fn move_word_impl<F>(cx: &mut Context, move_fn: F)
 where
-    F: Fn(RopeSlice, Range, usize) -> Range,
+    F: Fn(RopeSlice, Range, usize, &Folds) -> Range,
 {
     let count = cx.count();
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
+    let folds = doc.folds(view.id);
 
     let selection = doc
         .selection(view.id)
         .clone()
-        .transform(|range| move_fn(text, range, count));
+        .transform(|range| move_fn(text, range, count, folds));
     doc.set_selection(view.id, selection);
 }
 
@@ -1595,14 +1596,15 @@ fn should_open_url_externally(url: &Url) -> bool {
 
 fn extend_word_impl<F>(cx: &mut Context, extend_fn: F)
 where
-    F: Fn(RopeSlice, Range, usize) -> Range,
+    F: Fn(RopeSlice, Range, usize, &Folds) -> Range,
 {
     let count = cx.count();
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
+    let folds = doc.folds(view.id);
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let word = extend_fn(text, range, count);
+        let word = extend_fn(text, range, count, folds);
         let pos = word.cursor(text);
         range.put_cursor(text, pos, true)
     });
@@ -1739,6 +1741,7 @@ fn find_char(cx: &mut Context, direction: Direction, inclusive: bool, extend: bo
             Box::new(move |editor: &mut Editor| {
                 let (view, doc) = current!(editor);
                 let text = doc.text().slice(..);
+                let folds = doc.folds(view.id);
 
                 let selection = doc.selection(view.id).clone().transform(|range| {
                     let cursor_anchor = range.cursor(text);
@@ -1752,7 +1755,7 @@ fn find_char(cx: &mut Context, direction: Direction, inclusive: bool, extend: bo
                         (false, Direction::Backward) => cursor_anchor.saturating_sub(1),
                     };
 
-                    search::find_nth_char(count, text, ch, search_start_pos, direction)
+                    search::find_nth_char(count, text, ch, search_start_pos, direction, folds)
                         // Exclusive search should stop on previous character
                         .map(|pos| match (inclusive, direction) {
                             (true, Direction::Forward) => pos,
@@ -4748,10 +4751,12 @@ pub mod insert {
 
     pub fn delete_word_backward(cx: &mut Context) {
         let count = cx.count();
+        let (view, doc) = current!(cx.editor);
+        let folds = doc.folds(view.id).clone();
         delete_by_selection_insert_mode(
             cx,
-            |text, range| {
-                let anchor = movement::move_prev_word_start(text, *range, count).from();
+            move |text, range| {
+                let anchor = movement::move_prev_word_start(text, *range, count, &folds).from();
                 let next = Range::new(anchor, range.cursor(text));
                 let range = exclude_cursor(text, next, *range);
                 (range.from(), range.to())
@@ -4762,10 +4767,12 @@ pub mod insert {
 
     pub fn delete_word_forward(cx: &mut Context) {
         let count = cx.count();
+        let (view, doc) = current!(cx.editor);
+        let folds = doc.folds(view.id).clone();
         delete_by_selection_insert_mode(
             cx,
-            |text, range| {
-                let head = movement::move_next_word_end(text, *range, count).to();
+            move |text, range| {
+                let head = movement::move_next_word_end(text, *range, count, &folds).to();
                 (range.cursor(text), head)
             },
             Direction::Forward,
@@ -7239,6 +7246,7 @@ fn jump_to_word(cx: &mut Context, behaviour: Movement) {
     let mut words = Vec::with_capacity(jump_label_limit);
     let (view, doc) = current_ref!(cx.editor);
     let text = doc.text().slice(..);
+    let folds = doc.folds(view.id);
 
     // This is not necessarily exact if there is virtual text like soft wrap.
     // It's ok though because the extra jump labels will not be rendered.
@@ -7250,12 +7258,12 @@ fn jump_to_word(cx: &mut Context, behaviour: Movement) {
     let mut cursor_fwd = Range::point(cursor);
     let mut cursor_rev = Range::point(cursor);
     if text.get_char(cursor).is_some_and(|c| !c.is_whitespace()) {
-        let cursor_word_end = movement::move_next_word_end(text, cursor_fwd, 1);
+        let cursor_word_end = movement::move_next_word_end(text, cursor_fwd, 1, folds);
         //  single grapheme words need a special case
         if cursor_word_end.anchor == cursor {
             cursor_fwd = cursor_word_end;
         }
-        let cursor_word_start = movement::move_prev_word_start(text, cursor_rev, 1);
+        let cursor_word_start = movement::move_prev_word_start(text, cursor_rev, 1, folds);
         if cursor_word_start.anchor == next_grapheme_boundary(text, cursor) {
             cursor_rev = cursor_word_start;
         }
@@ -7263,7 +7271,7 @@ fn jump_to_word(cx: &mut Context, behaviour: Movement) {
     'outer: loop {
         let mut changed = false;
         while cursor_fwd.head < end {
-            cursor_fwd = movement::move_next_word_end(text, cursor_fwd, 1);
+            cursor_fwd = movement::move_next_word_end(text, cursor_fwd, 1, folds);
             // The cursor is on a word that is atleast two graphemes long and
             // madeup of word characters. The latter condition is needed because
             // move_next_word_end simply treats a sequence of characters from
@@ -7291,7 +7299,7 @@ fn jump_to_word(cx: &mut Context, behaviour: Movement) {
             break;
         }
         while cursor_rev.head > start {
-            cursor_rev = movement::move_prev_word_start(text, cursor_rev, 1);
+            cursor_rev = movement::move_prev_word_start(text, cursor_rev, 1, folds);
             // The cursor is on a word that is atleast two graphemes long and
             // madeup of word characters. The latter condition is needed because
             // move_prev_word_start simply treats a sequence of characters from

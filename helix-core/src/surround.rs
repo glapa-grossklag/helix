@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use crate::{
+    fold::Folds,
     graphemes::next_grapheme_boundary,
     match_brackets::{
         self, find_matching_bracket, find_matching_bracket_fuzzy, get_pair, is_close_bracket,
@@ -196,8 +197,8 @@ pub fn find_nth_pairs_pos(
                 .ok_or(Error::CursorOnAmbiguousPair)?
         } else {
             (
-                search::find_nth_char(n, text, open, pos, Direction::Backward),
-                search::find_nth_char(n, text, close, pos, Direction::Forward),
+                search::find_nth_char(n, text, open, pos, Direction::Backward, &Folds::default()),
+                search::find_nth_char(n, text, close, pos, Direction::Forward, &Folds::default()),
             )
         }
     } else {

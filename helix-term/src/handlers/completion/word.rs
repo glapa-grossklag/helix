@@ -38,7 +38,8 @@ pub(super) fn completion(
     let selection = doc.selection(view.id).clone();
     let pos = selection.primary().cursor(text);
 
-    let cursor = movement::move_prev_word_start(text, core::Range::point(pos), 1);
+    let cursor =
+        movement::move_prev_word_start(text, core::Range::point(pos), 1, doc.folds(view.id));
     if cursor.head == pos {
         return None;
     }

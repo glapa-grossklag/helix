@@ -249,3 +249,36 @@ async fn folds_follow_edits() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn word_and_find_char_motion_skip_a_closed_fold_without_opening_it() -> anyhow::Result<()> {
+    // "one" is the header of a fold hiding "two" and "three"; "four" is the next visible line.
+    // Before the fix, `w`/`f` would walk into the hidden text and pop the fold open (the same
+    // bug `vertical_movement_skips_closed_fold` already covers for `j`); the fold must now stay
+    // closed no matter how these are used, the same way it already does for `j`/`k`.
+    let text = "#[o|]#ne\n  two\n  three\nfour\n";
+
+    // a single `w` from "one" only reaches the boundary right after it (the header's own line
+    // ending, which is not hidden) -- same as `w` on any other line that ends right before more
+    // text, fold or no fold
+    assert_eq!(folded_spans(text, "zcw").await?, [(0, 2)]);
+    assert_eq!(primary_range(text, "zcw").await?, (0, 3));
+
+    // a second `w` used to land inside "two"/"three" and pop the fold open; it must now skip
+    // straight to "four", selecting the whole word, as if "two"/"three" did not exist
+    assert_eq!(folded_spans(text, "zcww").await?, [(0, 2)]);
+    assert_eq!(primary_range(text, "zcww").await?, (18, 22));
+
+    // `f` searching for a character that only occurs after the fold ("r" in "four") must still
+    // find it, skipping over the hidden lines
+    assert_eq!(folded_spans(text, "zcfr").await?, [(0, 2)]);
+    assert_eq!(primary_range(text, "zcfr").await?, (0, 22));
+
+    // `f` searching for a character that only occurs *inside* the hidden lines ("t" only in
+    // "three") must not find it: the hidden text does not participate in the search at all, and
+    // the fold stays closed either way
+    assert_eq!(folded_spans(text, "zcft").await?, [(0, 2)]);
+    assert_eq!(primary_range(text, "zcft").await?, (0, 1));
+
+    Ok(())
+}

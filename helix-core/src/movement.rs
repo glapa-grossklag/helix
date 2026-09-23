@@ -6,6 +6,7 @@ use crate::{
     char_idx_at_visual_offset,
     chars::{categorize_char, char_is_line_ending, CharCategory},
     doc_formatter::TextFormat,
+    fold::Folds,
     graphemes::{
         next_grapheme_boundary, nth_next_grapheme_boundary, nth_prev_grapheme_boundary,
         prev_grapheme_boundary,
@@ -184,55 +185,137 @@ pub fn move_vertically(
     new_range
 }
 
-pub fn move_next_word_start(slice: RopeSlice, range: Range, count: usize) -> Range {
-    word_move(slice, range, count, WordMotionTarget::NextWordStart)
+pub fn move_next_word_start(slice: RopeSlice, range: Range, count: usize, folds: &Folds) -> Range {
+    word_move(slice, range, count, WordMotionTarget::NextWordStart, folds)
 }
 
-pub fn move_next_word_end(slice: RopeSlice, range: Range, count: usize) -> Range {
-    word_move(slice, range, count, WordMotionTarget::NextWordEnd)
+pub fn move_next_word_end(slice: RopeSlice, range: Range, count: usize, folds: &Folds) -> Range {
+    word_move(slice, range, count, WordMotionTarget::NextWordEnd, folds)
 }
 
-pub fn move_prev_word_start(slice: RopeSlice, range: Range, count: usize) -> Range {
-    word_move(slice, range, count, WordMotionTarget::PrevWordStart)
+pub fn move_prev_word_start(slice: RopeSlice, range: Range, count: usize, folds: &Folds) -> Range {
+    word_move(slice, range, count, WordMotionTarget::PrevWordStart, folds)
 }
 
-pub fn move_prev_word_end(slice: RopeSlice, range: Range, count: usize) -> Range {
-    word_move(slice, range, count, WordMotionTarget::PrevWordEnd)
+pub fn move_prev_word_end(slice: RopeSlice, range: Range, count: usize, folds: &Folds) -> Range {
+    word_move(slice, range, count, WordMotionTarget::PrevWordEnd, folds)
 }
 
-pub fn move_next_long_word_start(slice: RopeSlice, range: Range, count: usize) -> Range {
-    word_move(slice, range, count, WordMotionTarget::NextLongWordStart)
+pub fn move_next_long_word_start(
+    slice: RopeSlice,
+    range: Range,
+    count: usize,
+    folds: &Folds,
+) -> Range {
+    word_move(
+        slice,
+        range,
+        count,
+        WordMotionTarget::NextLongWordStart,
+        folds,
+    )
 }
 
-pub fn move_next_long_word_end(slice: RopeSlice, range: Range, count: usize) -> Range {
-    word_move(slice, range, count, WordMotionTarget::NextLongWordEnd)
+pub fn move_next_long_word_end(
+    slice: RopeSlice,
+    range: Range,
+    count: usize,
+    folds: &Folds,
+) -> Range {
+    word_move(
+        slice,
+        range,
+        count,
+        WordMotionTarget::NextLongWordEnd,
+        folds,
+    )
 }
 
-pub fn move_prev_long_word_start(slice: RopeSlice, range: Range, count: usize) -> Range {
-    word_move(slice, range, count, WordMotionTarget::PrevLongWordStart)
+pub fn move_prev_long_word_start(
+    slice: RopeSlice,
+    range: Range,
+    count: usize,
+    folds: &Folds,
+) -> Range {
+    word_move(
+        slice,
+        range,
+        count,
+        WordMotionTarget::PrevLongWordStart,
+        folds,
+    )
 }
 
-pub fn move_prev_long_word_end(slice: RopeSlice, range: Range, count: usize) -> Range {
-    word_move(slice, range, count, WordMotionTarget::PrevLongWordEnd)
+pub fn move_prev_long_word_end(
+    slice: RopeSlice,
+    range: Range,
+    count: usize,
+    folds: &Folds,
+) -> Range {
+    word_move(
+        slice,
+        range,
+        count,
+        WordMotionTarget::PrevLongWordEnd,
+        folds,
+    )
 }
 
-pub fn move_next_sub_word_start(slice: RopeSlice, range: Range, count: usize) -> Range {
-    word_move(slice, range, count, WordMotionTarget::NextSubWordStart)
+pub fn move_next_sub_word_start(
+    slice: RopeSlice,
+    range: Range,
+    count: usize,
+    folds: &Folds,
+) -> Range {
+    word_move(
+        slice,
+        range,
+        count,
+        WordMotionTarget::NextSubWordStart,
+        folds,
+    )
 }
 
-pub fn move_next_sub_word_end(slice: RopeSlice, range: Range, count: usize) -> Range {
-    word_move(slice, range, count, WordMotionTarget::NextSubWordEnd)
+pub fn move_next_sub_word_end(
+    slice: RopeSlice,
+    range: Range,
+    count: usize,
+    folds: &Folds,
+) -> Range {
+    word_move(slice, range, count, WordMotionTarget::NextSubWordEnd, folds)
 }
 
-pub fn move_prev_sub_word_start(slice: RopeSlice, range: Range, count: usize) -> Range {
-    word_move(slice, range, count, WordMotionTarget::PrevSubWordStart)
+pub fn move_prev_sub_word_start(
+    slice: RopeSlice,
+    range: Range,
+    count: usize,
+    folds: &Folds,
+) -> Range {
+    word_move(
+        slice,
+        range,
+        count,
+        WordMotionTarget::PrevSubWordStart,
+        folds,
+    )
 }
 
-pub fn move_prev_sub_word_end(slice: RopeSlice, range: Range, count: usize) -> Range {
-    word_move(slice, range, count, WordMotionTarget::PrevSubWordEnd)
+pub fn move_prev_sub_word_end(
+    slice: RopeSlice,
+    range: Range,
+    count: usize,
+    folds: &Folds,
+) -> Range {
+    word_move(slice, range, count, WordMotionTarget::PrevSubWordEnd, folds)
 }
 
-fn word_move(slice: RopeSlice, range: Range, count: usize, target: WordMotionTarget) -> Range {
+fn word_move(
+    slice: RopeSlice,
+    range: Range,
+    count: usize,
+    target: WordMotionTarget,
+    folds: &Folds,
+) -> Range {
     let is_prev = matches!(
         target,
         WordMotionTarget::PrevWordStart
@@ -271,7 +354,9 @@ fn word_move(slice: RopeSlice, range: Range, count: usize, target: WordMotionTar
     // Do the main work.
     let mut range = start_range;
     for _ in 0..count {
-        let next_range = slice.chars_at(range.head).range_to_target(target, range);
+        let next_range = slice
+            .chars_at(range.head)
+            .range_to_target(target, range, slice, folds);
         if range == next_range {
             break;
         }
@@ -428,15 +513,29 @@ pub enum WordMotionTarget {
     PrevSubWordEnd,
 }
 
-pub trait CharHelpers {
-    fn range_to_target(&mut self, target: WordMotionTarget, origin: Range) -> Range;
+pub trait CharHelpers<'a> {
+    /// `slice` must be the same text `self` was constructed from: it is used to jump `self`
+    /// across a closed fold's hidden text, in the rare case the scan enters one.
+    fn range_to_target(
+        &mut self,
+        target: WordMotionTarget,
+        origin: Range,
+        slice: RopeSlice<'a>,
+        folds: &Folds,
+    ) -> Range;
 }
 
-impl CharHelpers for Chars<'_> {
+impl<'a> CharHelpers<'a> for Chars<'a> {
     /// Note: this only changes the anchor of the range if the head is effectively
     /// starting on a boundary (either directly or after skipping newline characters).
     /// Any other changes to the anchor should be handled by the calling code.
-    fn range_to_target(&mut self, target: WordMotionTarget, origin: Range) -> Range {
+    fn range_to_target(
+        &mut self,
+        target: WordMotionTarget,
+        origin: Range,
+        slice: RopeSlice<'a>,
+        folds: &Folds,
+    ) -> Range {
         let is_prev = matches!(
             target,
             WordMotionTarget::PrevWordStart
@@ -459,9 +558,25 @@ impl CharHelpers for Chars<'_> {
             &|idx| *idx += 1
         };
 
+        // The hidden text of a closed fold does not participate in word-boundary detection
+        // (matching vim, where a closed fold has no width for cursor motions like `w`/`b`/`e`):
+        // whenever `head` would land inside of one, this jumps both `head` and the iterator
+        // straight to the far side, in the direction of travel, as if it were not there. A
+        // no-op when `folds` is empty (the common case), so this changes nothing without folds.
+        let skip_fold = |head: &mut usize, chars: &mut Chars<'a>| {
+            if let Some(fold) = folds.hiding(*head) {
+                *head = if is_prev { fold.start } else { fold.end };
+                *chars = slice.chars_at(*head);
+                if is_prev {
+                    chars.reverse();
+                }
+            }
+        };
+
         // Initialize state variables.
         let mut anchor = origin.anchor;
         let mut head = origin.head;
+        skip_fold(&mut head, self);
         let mut prev_ch = {
             let ch = self.prev();
             if ch.is_some() {
@@ -475,6 +590,7 @@ impl CharHelpers for Chars<'_> {
             if char_is_line_ending(ch) {
                 prev_ch = Some(ch);
                 advance(&mut head);
+                skip_fold(&mut head, self);
             } else {
                 self.prev();
                 break;
@@ -497,6 +613,7 @@ impl CharHelpers for Chars<'_> {
             }
             prev_ch = Some(next_ch);
             advance(&mut head);
+            skip_fold(&mut head, self);
         }
 
         // Un-reverse the iterator if needed.
@@ -840,6 +957,120 @@ mod test {
         assert_eq!(coords_at_pos(slice, range.cursor(slice)).row, 1);
     }
 
+    /// Differential test: word motion over text with a closed fold must behave exactly as if
+    /// the fold's hidden *lines* (but not its still-visible header/boundary) were deleted from
+    /// the text outright -- i.e. the fold has zero width for word-counting purposes, the same
+    /// way it already does for `j`/`k`. Comparing against the existing (unfolded) algorithm run
+    /// on that "hidden lines deleted" reference text is more robust than hand-predicting exact
+    /// landing positions, which turned out to have non-obvious multi-hop composition behavior
+    /// even without any folds involved.
+    #[test]
+    fn word_motion_matches_the_fold_deleted_reference_text() {
+        use crate::fold::{FoldSpan, Folds};
+
+        // "one" is the header of a fold hiding "two", "three", and "four"; "five six seven" is
+        // the next visible line. `fold.start` (the header's own line ending) and everything
+        // from "five" onward stay in the reference text; only the fold's hidden lines are cut.
+        let folded_text = Rope::from("one\n  two\n  three\n  four\nfive six seven\n");
+        let folded = folded_text.slice(..);
+        let mut folds = Folds::default();
+        folds.close(folded, FoldSpan::new(0, 3).unwrap());
+        let fold = &folds.folded()[0];
+
+        let reference_text = Rope::from("one\nfive six seven\n");
+        let reference = reference_text.slice(..);
+
+        // maps a char index in `folded` to the equivalent index in `reference`: everything
+        // up to and including the fold's own (still-visible) line ending is unchanged, and
+        // everything from the fold's end onward is shifted back by exactly the number of
+        // hidden characters (fold.start itself stays, so it is not part of that count)
+        let to_reference = |pos: usize| -> usize {
+            if pos <= fold.start {
+                pos
+            } else {
+                pos - (fold.end - fold.start - 1)
+            }
+        };
+
+        for count in 1..=4 {
+            let folded_result = move_next_word_start(folded, Range::point(0), count, &folds).head;
+            let reference_result =
+                move_next_word_start(reference, Range::point(0), count, &Folds::default()).head;
+            assert_eq!(
+                to_reference(folded_result),
+                reference_result,
+                "{count}w from \"one\": folded landed at {:?}, reference at {:?}",
+                coords_at_pos(folded, folded_result),
+                coords_at_pos(reference, reference_result)
+            );
+        }
+
+        // and the same going backward, starting from the end of the text
+        let folded_end = folded.len_chars();
+        let reference_end = reference.len_chars();
+        for count in 1..=4 {
+            let folded_result =
+                move_prev_word_start(folded, Range::point(folded_end), count, &folds).head;
+            let reference_result = move_prev_word_start(
+                reference,
+                Range::point(reference_end),
+                count,
+                &Folds::default(),
+            )
+            .head;
+            assert_eq!(
+                to_reference(folded_result),
+                reference_result,
+                "{count}b from the end: folded landed at {:?}, reference at {:?}",
+                coords_at_pos(folded, folded_result),
+                coords_at_pos(reference, reference_result)
+            );
+        }
+    }
+
+    /// The same differential check as `word_motion_matches_the_fold_deleted_reference_text`,
+    /// but for `f`/`t` (`find_nth_char`) instead of word motion.
+    #[test]
+    fn find_char_matches_the_fold_deleted_reference_text() {
+        use crate::fold::{FoldSpan, Folds};
+        use crate::search::find_nth_char;
+
+        // the hidden lines contain '-' too, so a scan that fails to skip them (rather than
+        // just failing to find a match in them, which would be indistinguishable from a
+        // correct skip) would find a wrong, earlier match
+        let folded_text = Rope::from("one\n  t-wo\n  thr-ee\n  fo-ur\nfive-six-seven\n");
+        let folded = folded_text.slice(..);
+        let mut folds = Folds::default();
+        folds.close(folded, FoldSpan::new(0, 3).unwrap());
+        let fold = &folds.folded()[0];
+
+        let reference_text = Rope::from("one\nfive-six-seven\n");
+        let reference = reference_text.slice(..);
+
+        // maps a char index in `folded` to the equivalent index in `reference` (see the
+        // comment on the identical helper in `word_motion_matches_the_fold_deleted_reference_text`)
+        let to_reference = |pos: usize| -> usize {
+            if pos <= fold.start {
+                pos
+            } else {
+                pos - (fold.end - fold.start - 1)
+            }
+        };
+
+        for n in 1..=3 {
+            let folded_result = find_nth_char(n, folded, '-', 0, Direction::Forward, &folds);
+            let reference_result =
+                find_nth_char(n, reference, '-', 0, Direction::Forward, &Folds::default());
+            assert_eq!(
+                folded_result.map(to_reference),
+                reference_result,
+                "{n} \"f-\" from the start: folded found {:?}, reference found {:?}",
+                folded_result.map(|p| coords_at_pos(folded, p)),
+                reference_result.map(|p| coords_at_pos(reference, p))
+            );
+        }
+    }
+
     #[test]
     fn horizontal_moves_through_single_line_text() {
         let text = Rope::from(SINGLE_LINE_SAMPLE);
@@ -1074,19 +1305,34 @@ mod test {
     #[test]
     #[should_panic]
     fn nonsensical_ranges_panic_on_forward_movement_attempt_in_debug_mode() {
-        move_next_word_start(Rope::from("Sample").slice(..), Range::point(99999999), 1);
+        move_next_word_start(
+            Rope::from("Sample").slice(..),
+            Range::point(99999999),
+            1,
+            &Folds::default(),
+        );
     }
 
     #[test]
     #[should_panic]
     fn nonsensical_ranges_panic_on_forward_to_end_movement_attempt_in_debug_mode() {
-        move_next_word_end(Rope::from("Sample").slice(..), Range::point(99999999), 1);
+        move_next_word_end(
+            Rope::from("Sample").slice(..),
+            Range::point(99999999),
+            1,
+            &Folds::default(),
+        );
     }
 
     #[test]
     #[should_panic]
     fn nonsensical_ranges_panic_on_backwards_movement_attempt_in_debug_mode() {
-        move_prev_word_start(Rope::from("Sample").slice(..), Range::point(99999999), 1);
+        move_prev_word_start(
+            Rope::from("Sample").slice(..),
+            Range::point(99999999),
+            1,
+            &Folds::default(),
+        );
     }
 
     #[test]
@@ -1169,7 +1415,12 @@ mod test {
 
         for (sample, scenario) in tests {
             for (count, begin, expected_end) in scenario.into_iter() {
-                let range = move_next_word_start(Rope::from(sample).slice(..), begin, count);
+                let range = move_next_word_start(
+                    Rope::from(sample).slice(..),
+                    begin,
+                    count,
+                    &Folds::default(),
+                );
                 assert_eq!(range, expected_end, "Case failed: [{}]", sample);
             }
         }
@@ -1255,7 +1506,12 @@ mod test {
 
         for (sample, scenario) in tests {
             for (count, begin, expected_end) in scenario.into_iter() {
-                let range = move_next_sub_word_start(Rope::from(sample).slice(..), begin, count);
+                let range = move_next_sub_word_start(
+                    Rope::from(sample).slice(..),
+                    begin,
+                    count,
+                    &Folds::default(),
+                );
                 assert_eq!(range, expected_end, "Case failed: [{}]", sample);
             }
         }
@@ -1341,7 +1597,12 @@ mod test {
 
         for (sample, scenario) in tests {
             for (count, begin, expected_end) in scenario.into_iter() {
-                let range = move_next_sub_word_end(Rope::from(sample).slice(..), begin, count);
+                let range = move_next_sub_word_end(
+                    Rope::from(sample).slice(..),
+                    begin,
+                    count,
+                    &Folds::default(),
+                );
                 assert_eq!(range, expected_end, "Case failed: [{}]", sample);
             }
         }
@@ -1425,7 +1686,12 @@ mod test {
 
         for (sample, scenario) in tests {
             for (count, begin, expected_end) in scenario.into_iter() {
-                let range = move_next_long_word_start(Rope::from(sample).slice(..), begin, count);
+                let range = move_next_long_word_start(
+                    Rope::from(sample).slice(..),
+                    begin,
+                    count,
+                    &Folds::default(),
+                );
                 assert_eq!(range, expected_end, "Case failed: [{}]", sample);
             }
         }
@@ -1510,7 +1776,12 @@ mod test {
 
         for (sample, scenario) in tests {
             for (count, begin, expected_end) in scenario.into_iter() {
-                let range = move_prev_word_start(Rope::from(sample).slice(..), begin, count);
+                let range = move_prev_word_start(
+                    Rope::from(sample).slice(..),
+                    begin,
+                    count,
+                    &Folds::default(),
+                );
                 assert_eq!(range, expected_end, "Case failed: [{}]", sample);
             }
         }
@@ -1596,7 +1867,12 @@ mod test {
 
         for (sample, scenario) in tests {
             for (count, begin, expected_end) in scenario.into_iter() {
-                let range = move_prev_sub_word_start(Rope::from(sample).slice(..), begin, count);
+                let range = move_prev_sub_word_start(
+                    Rope::from(sample).slice(..),
+                    begin,
+                    count,
+                    &Folds::default(),
+                );
                 assert_eq!(range, expected_end, "Case failed: [{}]", sample);
             }
         }
@@ -1693,7 +1969,12 @@ mod test {
 
         for (sample, scenario) in tests {
             for (count, begin, expected_end) in scenario.into_iter() {
-                let range = move_prev_long_word_start(Rope::from(sample).slice(..), begin, count);
+                let range = move_prev_long_word_start(
+                    Rope::from(sample).slice(..),
+                    begin,
+                    count,
+                    &Folds::default(),
+                );
                 assert_eq!(range, expected_end, "Case failed: [{}]", sample);
             }
         }
@@ -1777,7 +2058,12 @@ mod test {
 
         for (sample, scenario) in tests {
             for (count, begin, expected_end) in scenario.into_iter() {
-                let range = move_next_word_end(Rope::from(sample).slice(..), begin, count);
+                let range = move_next_word_end(
+                    Rope::from(sample).slice(..),
+                    begin,
+                    count,
+                    &Folds::default(),
+                );
                 assert_eq!(range, expected_end, "Case failed: [{}]", sample);
             }
         }
@@ -1859,7 +2145,12 @@ mod test {
 
         for (sample, scenario) in tests {
             for (count, begin, expected_end) in scenario.into_iter() {
-                let range = move_prev_word_end(Rope::from(sample).slice(..), begin, count);
+                let range = move_prev_word_end(
+                    Rope::from(sample).slice(..),
+                    begin,
+                    count,
+                    &Folds::default(),
+                );
                 assert_eq!(range, expected_end, "Case failed: [{}]", sample);
             }
         }
@@ -1945,7 +2236,12 @@ mod test {
 
         for (sample, scenario) in tests {
             for (count, begin, expected_end) in scenario.into_iter() {
-                let range = move_prev_sub_word_end(Rope::from(sample).slice(..), begin, count);
+                let range = move_prev_sub_word_end(
+                    Rope::from(sample).slice(..),
+                    begin,
+                    count,
+                    &Folds::default(),
+                );
                 assert_eq!(range, expected_end, "Case failed: [{}]", sample);
             }
         }
@@ -2027,7 +2323,12 @@ mod test {
 
         for (sample, scenario) in tests {
             for (count, begin, expected_end) in scenario.into_iter() {
-                let range = move_next_long_word_end(Rope::from(sample).slice(..), begin, count);
+                let range = move_next_long_word_end(
+                    Rope::from(sample).slice(..),
+                    begin,
+                    count,
+                    &Folds::default(),
+                );
                 assert_eq!(range, expected_end, "Case failed: [{}]", sample);
             }
         }
@@ -2121,7 +2422,12 @@ mod test {
 
         for (sample, scenario) in tests {
             for (count, begin, expected_end) in scenario.into_iter() {
-                let range = move_prev_long_word_end(Rope::from(sample).slice(..), begin, count);
+                let range = move_prev_long_word_end(
+                    Rope::from(sample).slice(..),
+                    begin,
+                    count,
+                    &Folds::default(),
+                );
                 assert_eq!(range, expected_end, "Case failed: [{}]", sample);
             }
         }
