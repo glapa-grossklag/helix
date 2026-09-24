@@ -16,7 +16,7 @@ use std::cmp::Reverse;
 
 use crate::line_ending::line_end_char_index;
 use crate::syntax::{Loader, QueryIterEvent};
-use crate::{Assoc, ChangeSet, RopeSlice, Syntax, Tendril};
+use crate::{Assoc, ChangeSet, Range, RopeSlice, Syntax, Tendril};
 
 /// A region of the document that can be folded, as an inclusive range of document lines.
 ///
@@ -55,9 +55,9 @@ fn is_blank(line: RopeSlice) -> bool {
 /// Computes fold spans from the syntax tree: every *named* node that spans more than one line is
 /// foldable. This needs no language-specific query — internally it runs the same generic "any
 /// node" pattern against every language's grammar — so it works uniformly for any language with
-/// a tree-sitter grammar (which is also what backs highlighting). This is the same approach
-/// neovim's built-in treesitter folding (`vim.treesitter.foldexpr`) uses. Matches are found
-/// per-layer, so nodes belonging to an injected layer are covered too: a fenced code block in
+/// a tree-sitter grammar (which is also what backs highlighting). Unlike neovim's
+/// `vim.treesitter.foldexpr`, which uses per-language `folds.scm` queries, this folds any
+/// multi-line node, except for the root of each layer. Matches are found per-layer, so nodes belonging to an injected layer are covered too: a fenced code block in
 /// markdown folds like the language of the block does.
 pub fn tree_sitter_spans(syntax: &Syntax, text: RopeSlice, loader: &Loader) -> Vec<FoldSpan> {
     let mut spans = Vec::new();
@@ -66,7 +66,10 @@ pub fn tree_sitter_spans(syntax: &Syntax, text: RopeSlice, loader: &Loader) -> V
         let QueryIterEvent::Match(mat) = event else {
             continue;
         };
-        if !mat.node.is_named() {
+        // The root of a layer spans the whole document (or the whole injection). Folding it
+        // would hide everything below the first line whenever the cursor is on a top-level
+        // line that isn't inside of any other foldable node.
+        if !mat.node.is_named() || mat.node.parent().is_none() {
             continue;
         }
 
@@ -322,6 +325,46 @@ impl Folds {
     /// See the free function of the same name.
     pub fn visible_line_offset(&self, from: usize, count: isize) -> usize {
         visible_line_offset(&self.folded, from, count)
+    }
+
+    /// The number of visible lines between the visible lines `a` and `b`: how far `j`/`k` have
+    /// to move to get from one to the other. Every fold between them counts as a single line.
+    pub fn visible_distance(&self, a: usize, b: usize) -> usize {
+        let (a, b) = (self.visible_line(a.min(b)), self.visible_line(a.max(b)));
+        let from = self.folded.partition_point(|fold| fold.header_line < a);
+        let to = self.folded.partition_point(|fold| fold.header_line < b);
+        let hidden: usize = self.folded[from..to]
+            .iter()
+            .map(FoldedRange::hidden_lines)
+            .sum();
+        b - a - hidden
+    }
+
+    /// The last line of the block of lines that is displayed as the (visible) `line`: the last
+    /// line of the fold if `line` is the header of a closed fold (or hidden by one), otherwise
+    /// `line` itself. Together with [`Folds::visible_line`] this treats a closed fold as a
+    /// single line for line-wise operations, like vim does.
+    pub fn line_block_end(&self, line: usize) -> usize {
+        self.folded_at_header(self.visible_line(line))
+            .map_or(line, |fold| fold.last_line)
+    }
+
+    /// The closed fold that hides the cursor of `range`, if any.
+    ///
+    /// A range that selects everything a fold hides (like a line-wise selection of a closed
+    /// fold) has its cursor on the last hidden char. That cursor is considered to be on the
+    /// fold as a whole, not inside of it, so it is not hidden.
+    pub fn hiding_cursor(&self, text: RopeSlice, range: Range) -> Option<&FoldedRange> {
+        let fold = self.hiding(range.cursor(text))?;
+        let selects_whole_fold = range.head == fold.end && range.anchor <= fold.start;
+        (!selects_whole_fold).then_some(fold)
+    }
+
+    /// Where the cursor at `char_idx` is displayed: `char_idx` itself unless it is hidden,
+    /// in which case the cursor is displayed on the header's line ending, which stands for all
+    /// of the fold's hidden text.
+    pub fn cursor_display_pos(&self, char_idx: usize) -> usize {
+        self.hiding(char_idx).map_or(char_idx, |fold| fold.start)
     }
 
     pub fn is_closed(&self, span: FoldSpan) -> bool {
@@ -609,6 +652,59 @@ f
         assert_eq!(folds.visible_pos(text.slice(..), 3), 3);
     }
 
+    #[test]
+    fn visible_distance_counts_a_fold_as_one_line() {
+        let text = Rope::from("a\nb\nc\nd\ne\nf\ng\n");
+        let mut folds = Folds::default();
+        folds.close(text.slice(..), span(1, 3));
+        assert_eq!(folds.visible_distance(0, 4), 2);
+        assert_eq!(folds.visible_distance(4, 0), 2);
+        assert_eq!(folds.visible_distance(1, 5), 2);
+        assert_eq!(folds.visible_distance(4, 6), 2);
+        // a hidden line is where its header is
+        assert_eq!(folds.visible_distance(0, 2), 1);
+        assert_eq!(folds.visible_distance(1, 3), 0);
+    }
+
+    #[test]
+    fn line_block_end_covers_the_whole_fold() {
+        let text = Rope::from("a\nb\nc\nd\ne\n");
+        let mut folds = Folds::default();
+        folds.close(text.slice(..), span(1, 3));
+        assert_eq!(folds.line_block_end(0), 0);
+        assert_eq!(folds.line_block_end(1), 3);
+        assert_eq!(folds.line_block_end(2), 3);
+        assert_eq!(folds.line_block_end(4), 4);
+    }
+
+    #[test]
+    fn a_selection_of_the_whole_fold_does_not_hide_its_cursor() {
+        let text = Rope::from("a\nb\nc\nd\ne\n");
+        let slice = text.slice(..);
+        let mut folds = Folds::default();
+        folds.close(slice, span(1, 3));
+        let fold = folds.folded()[0].clone();
+        let header = text.line_to_char(1);
+
+        // the line-wise selection of the fold: its cursor is on the fold as a whole
+        assert!(folds
+            .hiding_cursor(slice, Range::new(header, fold.end))
+            .is_none());
+        assert!(folds
+            .hiding_cursor(slice, Range::new(0, fold.end))
+            .is_none());
+        // a cursor inside of the fold, or a selection that only covers part of it, is hidden
+        assert!(folds
+            .hiding_cursor(slice, Range::point(fold.start + 1))
+            .is_some());
+        assert!(folds
+            .hiding_cursor(slice, Range::new(fold.start + 2, fold.end))
+            .is_some());
+        // it is displayed on the header's line ending
+        assert_eq!(folds.cursor_display_pos(fold.end - 1), fold.start);
+        assert_eq!(folds.cursor_display_pos(0), 0);
+    }
+
     // Regression coverage for the bug where things that estimate "how far down the document
     // does an N-row viewport reach" (the syntax highlighter's range, `gw`'s candidate range,
     // `View::estimate_last_doc_line`, ...) computed that with plain `first_line + N`, which
@@ -728,6 +824,16 @@ mod language_test {
         assert!(spans.contains(&FoldSpan::new(0, 3).unwrap()), "{spans:?}");
         // a single-line node (the `let` statement) is not foldable
         assert!(!spans.iter().any(|s| s.first_line == 1), "{spans:?}");
+    }
+
+    #[test]
+    fn the_root_node_is_not_foldable() {
+        // closing "the innermost fold around the cursor" on a top-level line must not fold
+        // away the whole file
+        let Some(spans) = spans_for("rust", "use a;\nuse b;\n\nconst C: u8 = 1;\n") else {
+            return;
+        };
+        assert_eq!(spans, [], "{spans:?}");
     }
 
     #[test]

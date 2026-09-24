@@ -190,10 +190,12 @@ impl EditorView {
 
         Self::render_rulers(editor, doc, view, inner, surface, theme);
 
-        let primary_cursor = doc
-            .selection(view.id)
-            .primary()
-            .cursor(doc.text().slice(..));
+        // A selection of a whole closed fold has its cursor on hidden text
+        let primary_cursor = doc.folds(view.id).cursor_display_pos(
+            doc.selection(view.id)
+                .primary()
+                .cursor(doc.text().slice(..)),
+        );
         if is_focused {
             decorations.add_decoration(text_decorations::Cursor {
                 cache: &editor.cursor_cache,
@@ -300,6 +302,8 @@ impl EditorView {
         // Calculate viewport byte ranges:
         // Saturating subs to make it inclusive zero indexing.
         let last_line = text.len_lines().saturating_sub(1);
+        // rendering starts at the header if `row` is hidden by a fold
+        let row = folds.visible_line(row);
         let last_visible_line = folds
             .visible_line_offset(row, height as isize)
             .saturating_sub(1)
@@ -563,6 +567,7 @@ impl EditorView {
         let text = doc.text().slice(..);
         let selection = doc.selection(view.id);
         let primary_idx = selection.primary_index();
+        let folds = doc.folds(view.id);
 
         let cursorkind = cursor_shape_config.from_mode(mode);
         let cursor_is_block = cursorkind == CursorKind::Block;
@@ -621,6 +626,14 @@ impl EditorView {
             if range.head > range.anchor {
                 // Standard case.
                 let cursor_start = prev_grapheme_boundary(text, range.head);
+                // A selection of a whole closed fold has its cursor on hidden text: it is
+                // displayed on the header's line ending instead, which stands for that text.
+                let display_cursor = folds.cursor_display_pos(cursor_start);
+                let (cursor_start, cursor_end) = if display_cursor == cursor_start {
+                    (cursor_start, range.head)
+                } else {
+                    (display_cursor, next_grapheme_boundary(text, display_cursor))
+                };
                 // non block cursors look like they exclude the cursor
                 let selection_end =
                     if selection_is_primary && !cursor_is_block && mode != Mode::Insert {
@@ -632,7 +645,7 @@ impl EditorView {
                 // add block cursors
                 // skip primary cursor if terminal is unfocused - terminal cursor is used in that case
                 if !selection_is_primary || (cursor_is_block && is_terminal_focused) {
-                    spans.push((cursor_scope, cursor_start..range.head));
+                    spans.push((cursor_scope, cursor_start..cursor_end));
                 }
             } else {
                 // Reverse case.
@@ -749,7 +762,7 @@ impl EditorView {
         let cursors: Rc<[_]> = doc
             .selection(view.id)
             .iter()
-            .map(|range| range.cursor_line(text))
+            .map(|range| doc.folds(view.id).visible_line(range.cursor_line(text)))
             .collect();
 
         let mut offset = 0;
@@ -868,7 +881,8 @@ impl EditorView {
     pub fn cursorline(doc: &Document, view: &View, theme: &Theme) -> impl Decoration {
         let text = doc.text().slice(..);
         // TODO only highlight the visual line that contains the cursor instead of the full visual line
-        let primary_line = doc.selection(view.id).primary().cursor_line(text);
+        let folds = doc.folds(view.id);
+        let primary_line = folds.visible_line(doc.selection(view.id).primary().cursor_line(text));
 
         // The secondary_lines do contain the primary_line, it doesn't matter
         // as the else-if clause in the loop later won't test for the
@@ -879,7 +893,7 @@ impl EditorView {
         let secondary_lines: Vec<_> = doc
             .selection(view.id)
             .iter()
-            .map(|range| range.cursor_line(text))
+            .map(|range| folds.visible_line(range.cursor_line(text)))
             .collect();
 
         let primary_style = theme.get("ui.cursorline.primary");

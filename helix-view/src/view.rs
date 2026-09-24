@@ -381,9 +381,9 @@ impl View {
         // alone would suggest (it collapses however many lines it hides into a single visible
         // row), so this has to walk fold-aware "visible" steps rather than just adding the
         // viewport height directly.
-        let last_line = doc
-            .folds(self.id)
-            .visible_line_offset(line, self.inner_height() as isize);
+        let folds = doc.folds(self.id);
+        let last_line =
+            folds.visible_line_offset(folds.visible_line(line), self.inner_height() as isize);
         // Saturating subs to make it inclusive zero indexing.
         last_line.min(doc_text.len_lines()).saturating_sub(1)
     }
@@ -1304,5 +1304,33 @@ mod tests {
              it and the top of the document are folded away, got {}",
             view.estimate_last_doc_line(&doc)
         );
+    }
+
+    /// Closing a fold while the view starts inside of it must move the view to the fold's
+    /// header, where rendering starts, so that everything computed for the lines in view
+    /// (highlighting, the lines `gw` considers, ...) starts there too.
+    #[test]
+    fn closing_a_fold_moves_the_view_out_of_it() {
+        let mut view = View::new(DocumentId::default(), GutterConfig::default());
+        view.area = Rect::new(0, 0, 80, 10);
+        let mut doc = Document::from(
+            Rope::from("a\nb\nc\nd\ne\nf\n"),
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        doc.ensure_view_init(view.id);
+        let hidden = doc.text().line_to_char(2);
+        doc.set_view_offset(
+            view.id,
+            ViewPosition {
+                anchor: hidden,
+                horizontal_offset: 0,
+                vertical_offset: 0,
+            },
+        );
+
+        doc.close_folds(view.id, [FoldSpan::new(1, 3).unwrap()]);
+        assert_eq!(doc.view_offset(view.id).anchor, doc.text().line_to_char(1));
     }
 }

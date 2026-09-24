@@ -1459,6 +1459,21 @@ impl Document {
             .close_all(text, spans)
         {
             self.move_cursor_out_of_folds(view_id);
+            self.move_view_offset_out_of_folds(view_id);
+        }
+    }
+
+    /// The view must not start inside of a fold's hidden text, otherwise everything that is
+    /// computed for the lines in view (like syntax highlighting) would start below the fold's
+    /// header while rendering starts at the header.
+    fn move_view_offset_out_of_folds(&mut self, view_id: ViewId) {
+        let Some(mut offset) = self.get_view_offset(view_id) else {
+            return;
+        };
+        if let Some(fold) = self.folds(view_id).hiding(offset.anchor) {
+            offset.anchor = self.text.line_to_char(fold.header_line);
+            offset.vertical_offset = 0;
+            self.set_view_offset(view_id, offset);
         }
     }
 
@@ -1498,11 +1513,12 @@ impl Document {
         let new_selection = old_selection
             .clone()
             .transform(|range| {
+                if folds.hiding_cursor(text, range).is_none() {
+                    return range;
+                }
                 let cursor = range.cursor(text);
                 let pos = folds.visible_pos(text, cursor);
-                if pos == cursor {
-                    range
-                } else if next_grapheme_boundary(text, range.from()) == range.to() {
+                if next_grapheme_boundary(text, range.from()) == range.to() {
                     Range::point(pos)
                 } else {
                     Range::new(range.anchor, pos)
@@ -1529,8 +1545,10 @@ impl Document {
         }
         let text = self.text.slice(..);
         if let Some(selection) = self.selections.get(&view_id) {
-            for range in selection {
-                folds.reveal(range.cursor(text));
+            for &range in selection {
+                if folds.hiding_cursor(text, range).is_some() {
+                    folds.reveal(range.cursor(text));
+                }
             }
         }
     }

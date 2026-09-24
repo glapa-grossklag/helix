@@ -1069,6 +1069,42 @@ mod test {
                 reference_result.map(|p| coords_at_pos(reference, p))
             );
         }
+
+        // backward, for '-' and for line endings: the last hidden line ending must not match,
+        // but the header's own (visible) line ending must
+        for ch in ['-', '\n'] {
+            for n in 1..=4 {
+                let folded_result = find_nth_char(
+                    n,
+                    folded,
+                    ch,
+                    folded.len_chars(),
+                    Direction::Backward,
+                    &folds,
+                );
+                let reference_result = find_nth_char(
+                    n,
+                    reference,
+                    ch,
+                    reference.len_chars(),
+                    Direction::Backward,
+                    &Folds::default(),
+                );
+                // `to_reference` maps the last hidden line ending and the header's line ending
+                // to the same position, so check separately that the match isn't hidden
+                assert!(
+                    folded_result.is_none_or(|p| folds.hiding(p).is_none()),
+                    "{n} \"F{ch:?}\" from the end found a hidden char at {folded_result:?}"
+                );
+                assert_eq!(
+                    folded_result.map(to_reference),
+                    reference_result,
+                    "{n} \"F{ch:?}\" from the end: folded found {:?}, reference found {:?}",
+                    folded_result.map(|p| coords_at_pos(folded, p)),
+                    reference_result.map(|p| coords_at_pos(reference, p))
+                );
+            }
+        }
     }
 
     #[test]

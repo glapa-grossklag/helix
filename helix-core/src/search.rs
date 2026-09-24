@@ -37,45 +37,46 @@ pub fn find_nth_char<M: CharMatcher>(
         return None;
     }
 
-    // Jumps `pos`/`chars` to the far side of the fold hiding `pos`, in the direction of
-    // travel, if any. A no-op when `folds` is empty (the common case), so this changes
-    // nothing when there are no folds.
+    // `pos` is a gap index: moving forward reads the char at `pos`, moving backward the char
+    // before it. Whenever that char is hidden by a closed fold, `pos` jumps to the side of the
+    // fold that is visible in the direction of travel: its end when moving forward, or right
+    // after the header's (visible) line ending when moving backward. A no-op without folds.
+    let mut chars = text.get_chars_at(pos)?;
     let skip_fold = |pos: &mut usize, chars: &mut _| -> Option<()> {
-        if let Some(fold) = folds.hiding(*pos) {
+        let fold = match direction {
+            Direction::Forward => folds.hiding(*pos),
+            Direction::Backward => folds.hiding(pos.checked_sub(1)?),
+        };
+        if let Some(fold) = fold {
             *pos = match direction {
                 Direction::Forward => fold.end,
-                Direction::Backward => fold.start,
+                Direction::Backward => fold.start + 1,
             };
             *chars = text.get_chars_at(*pos)?;
         }
         Some(())
     };
 
-    let mut chars = text.get_chars_at(pos)?;
-    skip_fold(&mut pos, &mut chars)?;
-
     match direction {
         Direction::Forward => loop {
-            let char_pos = pos;
-            let c = chars.next()?;
-            pos += 1;
             skip_fold(&mut pos, &mut chars)?;
+            let c = chars.next()?;
             if char_matcher.char_match(c) {
                 n -= 1;
                 if n == 0 {
-                    return Some(char_pos);
+                    return Some(pos);
                 }
             }
+            pos += 1;
         },
         Direction::Backward => loop {
+            skip_fold(&mut pos, &mut chars)?;
             let c = chars.prev()?;
             pos -= 1;
-            let char_pos = pos;
-            skip_fold(&mut pos, &mut chars)?;
             if char_matcher.char_match(c) {
                 n -= 1;
                 if n == 0 {
-                    return Some(char_pos);
+                    return Some(pos);
                 }
             }
         },

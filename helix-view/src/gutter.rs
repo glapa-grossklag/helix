@@ -160,9 +160,11 @@ pub fn line_numbers<'doc>(
     let linenr = theme.get("ui.linenr");
     let linenr_select = theme.get("ui.linenr.selected");
 
-    let current_line = doc
-        .text()
-        .char_to_line(doc.selection(view.id).primary().cursor(text));
+    let folds = doc.folds(view.id);
+    let current_line = folds.visible_line(
+        doc.text()
+            .char_to_line(doc.selection(view.id).primary().cursor(text)),
+    );
 
     let line_number = editor.config().line_number;
     let mode = editor.mode;
@@ -181,7 +183,8 @@ pub fn line_numbers<'doc>(
                     && current_line != line;
 
                 let display_num = if relative {
-                    current_line.abs_diff(line)
+                    // a closed fold counts as a single line, the same as for `j`/`k`
+                    folds.visible_distance(current_line, line)
                 } else {
                     line + 1
                 };

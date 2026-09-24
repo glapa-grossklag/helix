@@ -2826,32 +2826,32 @@ fn extend_line_impl(cx: &mut Context, extend: Extend) {
     let (view, doc) = current!(cx.editor);
 
     let text = doc.text();
+    // A closed fold is selected as a whole and counts as a single line, like in vim
+    let folds = doc.folds(view.id);
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let (start_line, end_line) = range.line_range(text.slice(..));
+        let (start_line, end_line) = fold_line_range(folds, text.slice(..), range);
+        // the char after the last line of the (possibly folded) block of lines at `line`
+        let block_end =
+            |line: usize| text.line_to_char((folds.line_block_end(line) + 1).min(text.len_lines()));
 
         let start = text.line_to_char(start_line);
-        let end = text.line_to_char(
-            (end_line + 1) // newline of end_line
-                .min(text.len_lines()),
-        );
+        let end = block_end(end_line); // newline of end_line
 
         // extend to previous/next line if current line is selected
-        let (anchor, head) = if range.from() == start && range.to() == end {
-            match extend {
-                Extend::Above => (end, text.line_to_char(start_line.saturating_sub(count))),
-                Extend::Below => (
-                    start,
-                    text.line_to_char((end_line + count + 1).min(text.len_lines())),
-                ),
-            }
+        let count = if range.from() == start && range.to() == end {
+            count
         } else {
-            match extend {
-                Extend::Above => (end, text.line_to_char(start_line.saturating_sub(count - 1))),
-                Extend::Below => (
-                    start,
-                    text.line_to_char((end_line + count).min(text.len_lines())),
-                ),
-            }
+            count - 1
+        };
+        let (anchor, head) = match extend {
+            Extend::Above => (
+                end,
+                text.line_to_char(folds.visible_line_offset(start_line, -(count as isize))),
+            ),
+            Extend::Below => (
+                start,
+                block_end(folds.visible_line_offset(end_line, count as isize)),
+            ),
         };
 
         Range::new(anchor, head)
@@ -2859,6 +2859,13 @@ fn extend_line_impl(cx: &mut Context, extend: Extend) {
 
     doc.set_selection(view.id, selection);
 }
+/// Like [`Range::line_range`], but the lines hidden by a closed fold are represented by the
+/// fold's header. The last line of a range that selects a whole fold is its header, too.
+fn fold_line_range(folds: &Folds, text: RopeSlice, range: Range) -> (usize, usize) {
+    let (start_line, end_line) = range.line_range(text);
+    (folds.visible_line(start_line), folds.visible_line(end_line))
+}
+
 fn select_line_below(cx: &mut Context) {
     select_line_impl(cx, Extend::Below);
 }
@@ -2869,11 +2876,21 @@ fn select_line_impl(cx: &mut Context, extend: Extend) {
     let mut count = cx.count();
     let (view, doc) = current!(cx.editor);
     let text = doc.text();
-    let saturating_add = |a: usize, b: usize| (a + b).min(text.len_lines());
+    // A closed fold is selected as a whole and counts as a single line, like in vim
+    let folds = doc.folds(view.id);
+    let down = |line: usize, count: usize| {
+        folds
+            .visible_line_offset(line, count as isize)
+            .min(text.len_lines())
+    };
+    let up = |line: usize, count: usize| folds.visible_line_offset(line, -(count as isize));
+    // the char after the last line of the (possibly folded) block of lines at `line`
+    let block_end =
+        |line: usize| text.line_to_char((folds.line_block_end(line) + 1).min(text.len_lines()));
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let (start_line, end_line) = range.line_range(text.slice(..));
+        let (start_line, end_line) = fold_line_range(folds, text.slice(..), range);
         let start = text.line_to_char(start_line);
-        let end = text.line_to_char(saturating_add(end_line, 1));
+        let end = block_end(end_line);
         let direction = range.direction();
 
         // Extending to line bounds is counted as one step
@@ -2881,31 +2898,18 @@ fn select_line_impl(cx: &mut Context, extend: Extend) {
             count = count.saturating_sub(1)
         }
         let (anchor_line, head_line) = match (&extend, direction) {
-            (Extend::Above, Direction::Forward) => (start_line, end_line.saturating_sub(count)),
-            (Extend::Above, Direction::Backward) => (end_line, start_line.saturating_sub(count)),
-            (Extend::Below, Direction::Forward) => (start_line, saturating_add(end_line, count)),
-            (Extend::Below, Direction::Backward) => (end_line, saturating_add(start_line, count)),
+            (Extend::Above, Direction::Forward) => (start_line, up(end_line, count)),
+            (Extend::Above, Direction::Backward) => (end_line, up(start_line, count)),
+            (Extend::Below, Direction::Forward) => (start_line, down(end_line, count)),
+            (Extend::Below, Direction::Backward) => (end_line, down(start_line, count)),
         };
         let (anchor, head) = match anchor_line.cmp(&head_line) {
-            Ordering::Less => (
-                text.line_to_char(anchor_line),
-                text.line_to_char(saturating_add(head_line, 1)),
-            ),
+            Ordering::Less => (text.line_to_char(anchor_line), block_end(head_line)),
             Ordering::Equal => match extend {
-                Extend::Above => (
-                    text.line_to_char(saturating_add(anchor_line, 1)),
-                    text.line_to_char(head_line),
-                ),
-                Extend::Below => (
-                    text.line_to_char(head_line),
-                    text.line_to_char(saturating_add(anchor_line, 1)),
-                ),
+                Extend::Above => (block_end(anchor_line), text.line_to_char(head_line)),
+                Extend::Below => (text.line_to_char(head_line), block_end(anchor_line)),
             },
-
-            Ordering::Greater => (
-                text.line_to_char(saturating_add(anchor_line, 1)),
-                text.line_to_char(head_line),
-            ),
+            Ordering::Greater => (block_end(anchor_line), text.line_to_char(head_line)),
         };
         Range::new(anchor, head)
     });
@@ -2920,10 +2924,11 @@ fn extend_to_line_bounds(cx: &mut Context) {
         view.id,
         doc.selection(view.id).clone().transform(|range| {
             let text = doc.text();
+            let folds = doc.folds(view.id);
 
-            let (start_line, end_line) = range.line_range(text.slice(..));
+            let (start_line, end_line) = fold_line_range(folds, text.slice(..), range);
             let start = text.line_to_char(start_line);
-            let end = text.line_to_char((end_line + 1).min(text.len_lines()));
+            let end = text.line_to_char((folds.line_block_end(end_line) + 1).min(text.len_lines()));
 
             Range::new(start, end).with_direction(range.direction())
         }),
@@ -6145,8 +6150,12 @@ fn cursor_lines(doc: &Document, view_id: ViewId) -> Vec<usize> {
 /// that is still open. When the cursor is on the header of a closed fold this is the fold
 /// that contains the closed one.
 fn fold_to_close(folds: &Folds, spans: &[FoldSpan], line: usize) -> Option<FoldSpan> {
+    // Spans that start on the header of a closed fold but end inside of it are hidden already:
+    // closing them would change nothing. Only spans that contain the closed fold are candidates.
+    let hidden_until = folds.folded_at_header(line).map(|fold| fold.last_line);
     spans_containing_line(spans, line)
         .rev()
+        .filter(|span| hidden_until.is_none_or(|last_line| span.last_line >= last_line))
         .find(|span| !folds.is_closed(*span))
 }
 

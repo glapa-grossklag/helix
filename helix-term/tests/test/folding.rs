@@ -10,10 +10,18 @@ use helix_view::{current_ref, doc};
 /// afterwards, for tests that need to check fold state directly rather than through the
 /// resulting text and selection (which don't reveal it, since folding doesn't change the text).
 async fn folded_spans(text: &str, keys: &str) -> anyhow::Result<Vec<(usize, usize)>> {
+    folded_spans_with_config(None, text, keys).await
+}
+
+async fn folded_spans_with_config(
+    app: Option<Application>,
+    text: &str,
+    keys: &str,
+) -> anyhow::Result<Vec<(usize, usize)>> {
     let tc: TestCase = (text, keys, text).into();
     let spans = std::cell::RefCell::new(Vec::new());
     test_key_sequence_with_input_text(
-        None,
+        app,
         tc,
         &|app| {
             let (view, doc) = current_ref!(app.editor);
@@ -279,6 +287,72 @@ async fn word_and_find_char_motion_skip_a_closed_fold_without_opening_it() -> an
     // the fold stays closed either way
     assert_eq!(folded_spans(text, "zcft").await?, [(0, 2)]);
     assert_eq!(primary_range(text, "zcft").await?, (0, 1));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn line_wise_selection_treats_a_closed_fold_as_one_line() -> anyhow::Result<()> {
+    let text = "#[o|]#ne\n  two\n  three\nfour\nfive\n";
+
+    // `x` on the header selects the whole fold, which stays closed
+    test((text, "zcx", "#[one\n  two\n  three\n|]#four\nfive\n")).await?;
+    assert_eq!(folded_spans(text, "zcx").await?, [(0, 2)]);
+    // so it can be deleted as a whole, like `dd` on a closed fold in vim
+    test((text, "zcxd", "#[f|]#our\nfive\n")).await?;
+    // extending the selection moves past the whole fold
+    test((text, "zcxx", "#[one\n  two\n  three\nfour\n|]#five\n")).await?;
+    assert_eq!(folded_spans(text, "zcxx").await?, [(0, 2)]);
+    test((text, "zc2x", "#[one\n  two\n  three\nfour\n|]#five\n")).await?;
+    // `x` from the line above the fold reaches over the fold with a count too
+    test((
+        "#[z|]#ero\none\n  two\n  three\nfour\n",
+        "jzck2x",
+        "#[zero\none\n  two\n  three\n|]#four\n",
+    ))
+    .await?;
+    // `X` extends to the bounds of the whole fold as well
+    test((text, "zcX", "#[one\n  two\n  three\n|]#four\nfive\n")).await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn close_fold_on_a_closed_fold_closes_the_enclosing_fold() -> anyhow::Result<()> {
+    // the parameter list spans lines 0-2, the block lines 2-4, the function lines 0-4
+    let text = "fn f(\n    a: u8,\n) {\n    #[b|]#ody();\n}\n";
+
+    // the first `zc` closes the block, the second one the function around it, not the
+    // parameter list, which starts on the header of the closed block but is only partially
+    // around it
+    let spans = folded_spans_with_config(
+        Some(AppBuilder::new().with_file("foo.rs", None).build()?),
+        text,
+        "zczc",
+    )
+    .await?;
+    assert_eq!(spans, [(0, 4)]);
+
+    // without any fold around the closed function, `zc` changes nothing
+    let spans = folded_spans_with_config(
+        Some(AppBuilder::new().with_file("foo.rs", None).build()?),
+        text,
+        "zczczc",
+    )
+    .await?;
+    assert_eq!(spans, [(0, 4)]);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn find_char_backward_skips_a_closed_fold() -> anyhow::Result<()> {
+    let text = "one\n  two\n  three\n#[f|]#our\n";
+    // "t" only occurs in the hidden lines
+    assert_eq!(folded_spans(text, "kkzcjFt").await?, [(0, 2)]);
+    assert_eq!(primary_range(text, "kkzcjFt").await?, (18, 19));
+    // "o" is found on the header
+    assert_eq!(primary_range(text, "kkzcjFo").await?, (19, 0));
 
     Ok(())
 }
